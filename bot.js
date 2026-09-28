@@ -6,7 +6,7 @@ const express = require('express');
 const { verifyKey } = require('discord-interactions');
 
 const PORT = Number(process.env.PORT) || 3000;
-const MODEL = process.env.NVIDIA_MODEL || 'openai/gpt-oss-20b';
+const MODEL = process.env.NVIDIA_MODEL || 'nvidia/nemotron-3.5-lightning-30b-a3b';
 const MODEL_TIMEOUT_MS = Number(process.env.MODEL_TIMEOUT_MS) || 120_000;
 const MAX_ATTEMPTS = 3;
 const ALLOWED_USER_IDS = new Set(
