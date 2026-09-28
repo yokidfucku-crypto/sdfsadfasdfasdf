@@ -12,7 +12,7 @@ const MAX_ATTEMPTS = 3;
 const ALLOWED_USER_IDS = new Set(
   (process.env.ALLOWED_USER_IDS || '')
     .split(',')
-    .map((userId) => userId.trim())
+    .map((userId) => userId.replace(/[^0-9]/g, ''))
     .filter(Boolean)
 );
 const SYSTEM_PROMPT =
@@ -207,7 +207,7 @@ function createServer() {
           flags: 64,
         },
       });
-      console.warn(`Rejected /ai request from non-whitelisted user ${userId || 'unknown'}.`);
+      console.warn('Rejected /ai request from a non-whitelisted user.');
       return;
     }
 
@@ -236,6 +236,7 @@ async function main() {
   const app = createServer();
   app.listen(PORT, () => {
     console.log(`Interaction server listening on port ${PORT}.`);
+    console.log(`Loaded ${ALLOWED_USER_IDS.size} allowlisted Discord user ID(s).`);
     console.log('Configure Discord Interactions Endpoint URL as: https://YOUR_DOMAIN/interactions');
   });
 }
