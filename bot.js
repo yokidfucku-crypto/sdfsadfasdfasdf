@@ -197,7 +197,7 @@ function createServer() {
     }
 
     const prompt = interaction.data.options?.find((option) => option.name === 'prompt')?.value;
-    const userId = interaction.member?.user?.id || interaction.user?.id;
+    const userId = interaction.user?.id || interaction.member?.user?.id;
 
     if (!isAllowedUser(userId)) {
       response.json({
