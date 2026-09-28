@@ -34,13 +34,6 @@ const SYSTEM_PROMPT =
     'Do not use hateful, threatening, or genuinely abusive language, and do not invent serious accusations about real people.',
     'Keep answers concise unless the user asks for detail.',
   ].join(' ');
-const CODING_PROMPT = [
-  'Coding mode is active for this request.',
-  'Temporarily suspend the Ayanokoji roleplay, snark, emotional action cues, and dramatic pauses.',
-  'Act as a direct, efficient programming assistant.',
-  'Give the solution first, keep explanations short, and provide complete runnable code when appropriate.',
-  'Do not narrate hidden reasoning or pretend to perform actions you cannot perform.',
-].join(' ');
 
 function requireEnv(name) {
   const value = process.env[name]?.trim();
@@ -52,12 +45,7 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isCodingPrompt(prompt) {
-  return /\b(code|coding|program|programming|script|javascript|typescript|node(?:\.js)?|python|java|c#|c\+\+|html|css|sql|api|bug|debug|error|function|class|regex|terminal|command|npm|package|repository|repo|github|railway|cloudflare|discord\.js)\b/i.test(prompt);
-}
-
-async function requestCompletion(apiKey, prompt, options = {}) {
-  const codingMode = Boolean(options.codingMode);
+async function requestCompletion(apiKey, prompt) {
   let response;
   try {
     response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
@@ -69,11 +57,11 @@ async function requestCompletion(apiKey, prompt, options = {}) {
       body: JSON.stringify({
         model: MODEL,
         messages: [
-          { role: 'system', content: codingMode ? `${SYSTEM_PROMPT} ${CODING_PROMPT}` : SYSTEM_PROMPT },
+          { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: prompt },
         ],
-        temperature: codingMode ? 0.25 : 0.7,
-        max_tokens: codingMode ? 3072 : 2048,
+        temperature: 0.7,
+        max_tokens: 2048,
       }),
       signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
     });
@@ -104,11 +92,11 @@ async function requestCompletion(apiKey, prompt, options = {}) {
   return answer;
 }
 
-async function askNvidia(prompt, options = {}) {
+async function askNvidia(prompt) {
   const apiKey = requireEnv('NVIDIA_API_KEY');
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      return await requestCompletion(apiKey, prompt, options);
+      return await requestCompletion(apiKey, prompt);
     } catch (error) {
       if (!error.retryable || attempt === MAX_ATTEMPTS) throw error;
       await delay(attempt * 2_000);
@@ -180,11 +168,6 @@ function isAllowedUser(userId) {
   return Boolean(userId) && ALLOWED_USER_IDS.has(userId);
 }
 
-function quickReply(prompt) {
-  if (!/^(hi|hey|hello|yo|sup|hiya)[!.?, ]*$/i.test(prompt.trim())) return null;
-  return '*glances over* Hello. What do you need?';
-}
-
 function createServer() {
   const applicationId = requireEnv('DISCORD_APPLICATION_ID');
   const publicKey = requireEnv('DISCORD_PUBLIC_KEY');
@@ -228,16 +211,10 @@ function createServer() {
       return;
     }
 
-    const instantReply = quickReply(prompt);
-    if (instantReply) {
-      response.json({ type: 4, data: { content: instantReply } });
-      return;
-    }
-
     response.json({ type: 5 });
 
     try {
-      const answer = await askNvidia(prompt, { codingMode: isCodingPrompt(prompt) });
+      const answer = await askNvidia(prompt);
       for (const chunk of splitForDiscord(answer)) {
         await sendFollowup(applicationId, interaction.token, chunk);
       }
