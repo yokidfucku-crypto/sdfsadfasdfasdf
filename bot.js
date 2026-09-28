@@ -180,6 +180,11 @@ function isAllowedUser(userId) {
   return Boolean(userId) && ALLOWED_USER_IDS.has(userId);
 }
 
+function quickReply(prompt) {
+  if (!/^(hi|hey|hello|yo|sup|hiya)[!.?, ]*$/i.test(prompt.trim())) return null;
+  return '*glances over* Hello. What do you need?';
+}
+
 function createServer() {
   const applicationId = requireEnv('DISCORD_APPLICATION_ID');
   const publicKey = requireEnv('DISCORD_PUBLIC_KEY');
@@ -220,6 +225,12 @@ function createServer() {
         },
       });
       console.warn(`Rejected /ai request from non-whitelisted user ${userId || 'unknown'}.`);
+      return;
+    }
+
+    const instantReply = quickReply(prompt);
+    if (instantReply) {
+      response.json({ type: 4, data: { content: instantReply } });
       return;
     }
 
