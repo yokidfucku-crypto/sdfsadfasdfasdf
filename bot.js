@@ -4,12 +4,17 @@ require('dotenv').config();
 
 const express = require('express');
 const { verifyKey } = require('discord-interactions');
-const { Pool } = require('pg');
 
 const PORT = Number(process.env.PORT) || 3000;
 const MODEL = process.env.NVIDIA_MODEL || 'openai/gpt-oss-20b';
 const MODEL_TIMEOUT_MS = Number(process.env.MODEL_TIMEOUT_MS) || 120_000;
 const MAX_ATTEMPTS = 3;
+const ALLOWED_USER_IDS = new Set(
+  (process.env.ALLOWED_USER_IDS || '')
+    .split(',')
+    .map((userId) => userId.trim())
+    .filter(Boolean)
+);
 const SYSTEM_PROMPT =
   process.env.AI_SYSTEM_PROMPT ||
   [
@@ -29,80 +34,6 @@ const SYSTEM_PROMPT =
     'Do not use hateful, threatening, or genuinely abusive language, and do not invent serious accusations about real people.',
     'Keep answers concise unless the user asks for detail.',
   ].join(' ');
-
-let memoryPool;
-
-function getMemoryPool() {
-  if (!process.env.DATABASE_URL) return null;
-  if (!memoryPool) {
-    memoryPool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-      max: 5,
-    });
-  }
-  return memoryPool;
-}
-
-async function initializeMemory() {
-  const pool = getMemoryPool();
-  if (!pool) {
-    console.warn('DATABASE_URL is not set; memory is disabled.');
-    return;
-  }
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ai_memories (
-      id BIGSERIAL PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      subject TEXT NOT NULL,
-      fact TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  console.log('Persistent AI memory is enabled.');
-}
-
-function extractMemory(prompt) {
-  const match = prompt.trim().match(
-    /^([A-Za-z][A-Za-z0-9_-]{1,31})\s+(is|was|seems|looks|likes|loves|hates|has|can|can't|cannot)\s+(.{2,300})[.!?]?$/i
-  );
-  if (!match) return null;
-  return {
-    subject: match[1].toLowerCase(),
-    fact: `${match[1]} ${match[2]} ${match[3]}`.trim(),
-  };
-}
-
-async function saveMemory(userId, memory) {
-  const pool = getMemoryPool();
-  if (!pool || !memory) return;
-  await pool.query(
-    'INSERT INTO ai_memories (user_id, subject, fact) VALUES ($1, $2, $3)',
-    [userId, memory.subject, memory.fact]
-  );
-}
-
-async function loadMemories(userId, prompt) {
-  const pool = getMemoryPool();
-  if (!pool) return [];
-  const result = await pool.query(
-    `SELECT subject, fact
-       FROM ai_memories
-      WHERE user_id = $1
-        AND POSITION(subject IN LOWER($2)) > 0
-      ORDER BY created_at DESC
-      LIMIT 20`,
-    [userId, prompt.toLowerCase()]
-  );
-  return result.rows;
-}
-
-async function promptWithMemory(userId, prompt) {
-  const memories = await loadMemories(userId, prompt);
-  if (!memories.length) return prompt;
-  const context = memories.map((memory) => `- ${memory.fact}`).join('\n');
-  return `Relevant user-provided memories (use only when relevant):\n${context}\n\nUser request: ${prompt}`;
-}
 
 function requireEnv(name) {
   const value = process.env[name]?.trim();
@@ -233,6 +164,10 @@ async function sendFollowup(applicationId, interactionToken, content) {
   });
 }
 
+function isAllowedUser(userId) {
+  return Boolean(userId) && ALLOWED_USER_IDS.has(userId);
+}
+
 function createServer() {
   const applicationId = requireEnv('DISCORD_APPLICATION_ID');
   const publicKey = requireEnv('DISCORD_PUBLIC_KEY');
@@ -263,12 +198,23 @@ function createServer() {
 
     const prompt = interaction.data.options?.find((option) => option.name === 'prompt')?.value;
     const userId = interaction.member?.user?.id || interaction.user?.id;
+
+    if (!isAllowedUser(userId)) {
+      response.json({
+        type: 4,
+        data: {
+          content: 'This app is not enabled for your account.',
+          flags: 64,
+        },
+      });
+      console.warn(`Rejected /ai request from non-whitelisted user ${userId || 'unknown'}.`);
+      return;
+    }
+
     response.json({ type: 5 });
 
     try {
-      const memory = extractMemory(prompt);
-      await saveMemory(userId, memory);
-      const answer = await askNvidia(await promptWithMemory(userId, prompt));
+      const answer = await askNvidia(prompt);
       for (const chunk of splitForDiscord(answer)) {
         await sendFollowup(applicationId, interaction.token, chunk);
       }
@@ -286,7 +232,6 @@ function createServer() {
 }
 
 async function main() {
-  await initializeMemory();
   await registerCommands();
   const app = createServer();
   app.listen(PORT, () => {
