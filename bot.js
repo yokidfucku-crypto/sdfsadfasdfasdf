@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const express = require('express');
 const { verifyKey } = require('discord-interactions');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
 
 const PORT = Number(process.env.PORT) || 3000;
 const MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
@@ -171,6 +172,46 @@ async function sendFollowup(applicationId, interactionToken, content) {
   });
 }
 
+async function startGateway() {
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.DirectMessages,
+      GatewayIntentBits.MessageContent,
+    ],
+    partials: [Partials.Channel],
+  });
+
+  client.once('ready', () => {
+    console.log(`Discord Gateway connected as ${client.user.tag}.`);
+  });
+
+  client.on('messageCreate', async (message) => {
+    if (message.author.bot || !message.reference?.messageId) return;
+    if (!isAllowedUser(message.author.id)) return;
+
+    const referencedMessage = await message.fetchReference().catch(() => null);
+    if (!referencedMessage || referencedMessage.author.id !== client.user.id) return;
+
+    const prompt = message.content.trim();
+    if (!prompt) return;
+
+    try {
+      await message.channel.sendTyping();
+      const answer = await askGroq(prompt);
+      const chunks = splitForDiscord(answer);
+      await message.reply({ content: chunks.shift() });
+      for (const chunk of chunks) await message.channel.send(chunk);
+    } catch (error) {
+      console.error('Reply AI request failed:', error.message);
+      await message.reply('I could not reach the AI service.').catch(() => {});
+    }
+  });
+
+  await client.login(requireEnv('DISCORD_BOT_TOKEN'));
+}
+
 function isAllowedUser(userId) {
   return Boolean(userId) && ALLOWED_USER_IDS.has(userId);
 }
@@ -246,6 +287,7 @@ async function main() {
     console.log(`Loaded ${ALLOWED_USER_IDS.size} allowlisted Discord user ID(s).`);
     console.log('Configure Discord Interactions Endpoint URL as: https://YOUR_DOMAIN/interactions');
   });
+  await startGateway();
 }
 
 if (require.main === module) {
