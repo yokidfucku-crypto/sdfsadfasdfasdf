@@ -62,6 +62,7 @@ async function requestCompletion(apiKey, prompt) {
         ],
         temperature: 0.7,
         max_tokens: 2048,
+        chat_template_kwargs: { enable_thinking: false },
       }),
       signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
     });
