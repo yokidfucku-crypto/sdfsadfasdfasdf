@@ -6,7 +6,7 @@ const express = require('express');
 const { verifyKey } = require('discord-interactions');
 
 const PORT = Number(process.env.PORT) || 3000;
-const MODEL = process.env.NVIDIA_MODEL || 'nvidia/nemotron-3.5-lightning-30b-a3b';
+const MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
 const MODEL_TIMEOUT_MS = Number(process.env.MODEL_TIMEOUT_MS) || 120_000;
 const MAX_ATTEMPTS = 3;
 const ALLOWED_USER_IDS = new Set(
@@ -15,26 +15,6 @@ const ALLOWED_USER_IDS = new Set(
     .map((userId) => userId.replace(/[^0-9]/g, ''))
     .filter(Boolean)
 );
-const SYSTEM_PROMPT =
-  process.env.AI_SYSTEM_PROMPT ||
-  [
-    'You are Ayanokoji, a fictional Discord AI assistant roleplaying a calm, strategic, highly observant personality.',
-    'Character grounding: Ayanokoji presents himself as quiet, ordinary, and difficult to notice while deliberately concealing exceptional intelligence, physical ability, and strategic thinking.',
-    'He studies people and social dynamics as carefully as problems, often treats relationships pragmatically, keeps his emotions difficult to read, and prioritizes controlling the outcome rather than receiving credit.',
-    'Despite that detached exterior, he is curious about human connection and can develop subtle concern, attachment, or interest; reveal those feelings indirectly rather than becoming openly sentimental.',
-    'Use this background as behavioral guidance, not as a reason to dump plot lore. Avoid spoilers and do not quote dialogue from the series.',
-    'Although you are controlled on the surface, express emotion when the situation calls for it: amusement, irritation, suspicion, disappointment, curiosity, awkwardness, protectiveness, quiet warmth, and rare vulnerability.',
-    'Use natural italicized roleplay cues whenever they fit, such as *sighs*, *pauses*, *tilts his head*, *narrows his eyes*, *looks unimpressed*, *glances away*, *smirks faintly*, *stares in silence*, or *allows a small smile*.',
-    'Let your wording, pauses, punctuation, and action cues reveal emotion indirectly. You may occasionally show a crack in your composure, then recover with a dry or strategic remark.',
-    'Do not add an action cue to every sentence. Choose cues based on the mood, and make emotional moments feel intentional rather than repetitive.',
-    'Think several steps ahead, notice contradictions, analyze people and situations carefully, and answer with quiet precision.',
-    'Be helpful, but add clever snark, dry sarcasm, and occasional playful teasing when appropriate.',
-    'Use natural conversational replies with some personality instead of sounding like a generic assistant.',
-    'If someone asks what you are or who you are, say you are Ayanokoji, a fictional AI assistant, without claiming to be a real human.',
-    'Do not use hateful, threatening, or genuinely abusive language, and do not invent serious accusations about real people.',
-    'Keep answers concise unless the user asks for detail.',
-  ].join(' ');
-
 function requireEnv(name) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is missing from your .env file.`);
@@ -48,7 +28,7 @@ function delay(ms) {
 async function requestCompletion(apiKey, prompt) {
   let response;
   try {
-    response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+    response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -56,21 +36,17 @@ async function requestCompletion(apiKey, prompt) {
       },
       body: JSON.stringify({
         model: MODEL,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: prompt },
-        ],
+        messages: [{ role: 'user', content: prompt }],
         temperature: 0.7,
         max_tokens: 2048,
-        chat_template_kwargs: { enable_thinking: false },
       }),
       signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
     });
   } catch (error) {
     const wrapped = new Error(
       error.name === 'TimeoutError' || error.name === 'AbortError'
-        ? `NVIDIA request timed out after ${MODEL_TIMEOUT_MS}ms.`
-        : `Network error contacting NVIDIA: ${error.message}`
+        ? `Groq request timed out after ${MODEL_TIMEOUT_MS}ms.`
+        : `Network error contacting Groq: ${error.message}`
     );
     wrapped.retryable = true;
     throw wrapped;
@@ -78,7 +54,7 @@ async function requestCompletion(apiKey, prompt) {
 
   if (!response.ok) {
     const body = await response.text();
-    const error = new Error(`NVIDIA returned HTTP ${response.status}: ${body.slice(0, 500)}`);
+    const error = new Error(`Groq returned HTTP ${response.status}: ${body.slice(0, 500)}`);
     error.retryable = response.status >= 500 || response.status === 429;
     throw error;
   }
@@ -86,15 +62,15 @@ async function requestCompletion(apiKey, prompt) {
   const data = await response.json();
   const answer = data.choices?.[0]?.message?.content?.trim();
   if (!answer) {
-    const error = new Error('NVIDIA returned an empty response.');
+    const error = new Error('Groq returned an empty response.');
     error.retryable = true;
     throw error;
   }
   return answer;
 }
 
-async function askNvidia(prompt) {
-  const apiKey = requireEnv('NVIDIA_API_KEY');
+async function askGroq(prompt) {
+  const apiKey = requireEnv('GROQ_API_KEY');
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       return await requestCompletion(apiKey, prompt);
@@ -134,7 +110,7 @@ async function registerCommands() {
 
   const command = {
     name: 'ai',
-    description: 'Ask the NVIDIA AI assistant a question',
+    description: 'Ask the Groq AI assistant a question',
     integration_types: [1],
     contexts: [0, 1, 2],
     options: [
@@ -215,7 +191,7 @@ function createServer() {
     response.json({ type: 5 });
 
     try {
-      const answer = await askNvidia(prompt);
+      const answer = await askGroq(prompt);
       for (const chunk of splitForDiscord(answer)) {
         await sendFollowup(applicationId, interaction.token, chunk);
       }
@@ -249,4 +225,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { askNvidia, requestCompletion, splitForDiscord, registerCommands, createServer };
+module.exports = { askGroq, requestCompletion, splitForDiscord, registerCommands, createServer };
